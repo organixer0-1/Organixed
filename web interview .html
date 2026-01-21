@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Public Speaking Simulator MVP</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; font-family: sans-serif; }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            z-index: 10;
+            background: rgba(0,0,0,0.7);
+            padding: 20px;
+            border-radius: 8px;
+            max-width: 300px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover { background: #45a049; }
+        .status { margin-top: 10px; font-size: 14px; color: #ccc; }
+        #webcam-container {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            height: 150px;
+            background: black;
+            border: 2px solid #555;
+            z-index: 10;
+        }
+        video { width: 100%; height: 100%; object-fit: cover; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h2>Speech Simulator</h2>
+    <p>Practice your volume and pacing.</p>
+    <p><strong>Logic:</strong> Speak clearly to engage the audience. Silence makes them bored.</p>
+    <button id="startButton">Start Simulation</button>
+    <div class="status" id="statusText">Status: Waiting for start...</div>
+    <div class="status" id="volLevel">Volume: 0</div>
+</div>
+
+<div id="webcam-container">
+    <video id="webcam" autoplay playsinline muted></video>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script>
+    // --- CONFIGURATION ---
+    let audioContext, analyser, microphone, dataArray;
+    let isRunning = false;
+    let audienceMembers = [];
+    const AUDIENCE_count = 20; // 4 rows of 5
+
+    // --- THREE.JS SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x202025);
+    scene.fog = new THREE.Fog(0x202025, 10, 50);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 3, 12); // Position on "stage" looking out
+    camera.lookAt(0, 0, -10);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+    const spotLight = new THREE.SpotLight(0xffffff, 1);
+    spotLight.position.set(0, 10, 5);
+    scene.add(spotLight);
+
+    // --- CREATE AUDIENCE (Simple Shapes) ---
+    const geometry = new THREE.SphereGeometry(0.6, 32, 32);
+    const bodyGeometry = new THREE.CylinderGeometry(0.5, 0.7, 1.5, 32);
+
+    for (let row = 0; row < 4; row++) {
+        for (let col = -3; col <= 3; col++) {
+            // Group for head and body
+            const person = new THREE.Group();
+
+            // Head
+            const material = new THREE.MeshStandardMaterial({ color: 0x888888 });
+            const head = new THREE.Mesh(geometry, material);
+            head.position.y = 1.8;
+            
+            // Body
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const body = new THREE.Mesh(bodyGeometry, bodyMat);
+            body.position.y = 0.75;
+
+            person.add(head);
+            person.add(body);
+
+            // Positioning in the auditorium
+            person.position.set(col * 2.5 + (Math.random() * 0.5), 0, -5 - (row * 3));
+            
+            // Add custom properties for animation
+            person.userData = {
+                baseY: person.position.y,
+                reactionState: 'neutral', // neutral, happy, bored
+                randomOffset: Math.random() * 100
+            };
+
+            scene.add(person);
+            audienceMembers.push({ mesh: person, material: material });
+        }
+    }
+
+    // Floor
+    const floorGeo = new THREE.PlaneGeometry(50, 50);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    scene.add(floor);
+
+    // --- INPUT HANDLING ---
+    document.getElementById('startButton').addEventListener('click', async () => {
+        try {
+            // Audio Setup
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+            
+            // Webcam Setup
+            const video = document.getElementById('webcam');
+            video.srcObject = stream;
+            
+            microphone = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            microphone.connect(analyser);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            isRunning = true;
+            document.getElementById('statusText').innerText = "Status: Simulation Active";
+            document.getElementById('startButton').style.display = 'none';
+        } catch (err) {
+            alert("Microphone/Camera access denied or error: " + err);
+        }
+    });
+
+    // --- ANIMATION LOOP ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        let volume = 0;
+
+        if (isRunning && analyser) {
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for(let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
+            }
+            volume = sum / dataArray.length; // Average volume (0-255)
+            
+            document.getElementById('volLevel').innerText = `Volume: ${Math.floor(volume)}`;
+        }
+
+        const time = Date.now() * 0.001;
+
+        // Update Audience Behavior
+        audienceMembers.forEach(member => {
+            const person = member.mesh;
+            const headMat = member.material;
+
+            // REACTION LOGIC
+            if (volume > 20) {
+                // Engaging Speech: Audience leans forward, nods slightly, turns warm color
+                headMat.color.lerp(new THREE.Color(0x4CAF50), 0.05); // Greenish
+                
+                // Nodding animation
+                person.rotation.x = Math.sin(time * 5 + person.userData.randomOffset) * 0.1;
+                person.rotation.y = Math.sin(time * 0.5 + person.userData.randomOffset) * 0.1;
+            } else {
+                // Silence/Boredom: Audience looks around, turns cool color
+                headMat.color.lerp(new THREE.Color(0x5555AA), 0.02); // Blueish
+                
+                // Looking around/fidgeting
+                person.rotation.y = Math.sin(time + person.userData.randomOffset) * 0.3;
+                person.rotation.x = Math.max(0, Math.sin(time * 0.5) * 0.2); // Looking down (phone?)
+            }
+        });
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // Resize Handler
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
